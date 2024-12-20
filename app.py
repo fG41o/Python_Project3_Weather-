@@ -3,7 +3,7 @@ import pandas as pd
 from geopy.geocoders import Nominatim
 import openmeteo_requests
 import requests_cache
-from dash import Dash, dcc, html, Input, Output, State
+from dash import Dash, dcc, html, Input, Output, State, callback_context
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -109,43 +109,61 @@ def get_weather_data(user_input: list[str], num_days: int) -> object:
 # Создание экземпляра Dash приложения
 app = Dash(__name__)
 
-app.layout = html.Div([
-    html.H1("Прогноз погоды по маршруту"),
+app.layout = html.Div(style={'padding': '20px', 'fontFamily': 'Arial, sans-serif'}, children=[
+    html.H1("Прогноз погоды по маршруту", style={'textAlign': 'center', 'color': '#4A90E2'}),
 
-    dcc.Input(id='city-input', type='text', placeholder='Введите город'),
+    dcc.Input(id='city-input', type='text', placeholder='Введите город', style={'width': '300px'}),
 
-    html.Button('Добавить город', id='add-button', n_clicks=0),
+    html.Button('Добавить город в маршрут', id='add-button', n_clicks=0,
+                style={'marginLeft': '10px', 'backgroundColor': '#4CAF50', 'color': 'white'}, className='button'),
 
-    html.Div(id='cities-container', children=[]),
+    html.Div(id='cities-container', children=[], style={'marginBottom': '20px'}),
 
-    dcc.Input(id='days-input', type='number', value=3, min=1, max=7),
+    dcc.Input(id='days-input', type='number', value=3, min=1, max=7, style={'width': '100px'}),
 
-    html.Button('Получить погоду', id='submit-button', n_clicks=0),
+    html.Button('Получить погоду на несколько дней', id='submit-button', n_clicks=0,
+                style={'marginLeft': '10px', 'backgroundColor': '#2196F3', 'color': 'white'}, className='button'),
 
-    dcc.Graph(id='weather-map'),
+    html.Button('Очистить маршрут', id='clear-button', n_clicks=0,
+                style={'marginLeft': '10px', 'backgroundColor': '#f44336', 'color': 'white'}, className='button'),
 
-    dcc.Graph(id='weather-graphs'),
-
-    # Добавление ConfirmDialog для ошибок
-    dcc.ConfirmDialog(
-        id='error-dialog',
-        message='',  # Сообщение будет обновляться в зависимости от ошибки
-        displayed=False  # По умолчанию не показывать диалог
+    dcc.Loading(
+        id="loading",
+        type="default",
+        children=[
+            dcc.Graph(id='weather-map', style={'height': '400px'}),
+            dcc.Graph(id='weather-graphs', style={'height': '400px'}),
+        ]
     ),
 
+    dcc.ConfirmDialog(
+        id='error-dialog',
+        message='',
+        displayed=False
+    ),
 ])
+
+
 
 
 @app.callback(
     [Output('cities-container', 'children'),
      Output('error-dialog', 'message'),
      Output('error-dialog', 'displayed')],
-    Input('add-button', 'n_clicks'),
-    State('city-input', 'value'),
-    State('cities-container', 'children')
+    [Input('add-button', 'n_clicks'),
+     Input('clear-button', 'n_clicks')],
+    [State('city-input', 'value'),
+     State('cities-container', 'children')]
 )
-def add_city(n_clicks, city_input, children):
-    if n_clicks > 0 and city_input:
+def update_cities(add_clicks, clear_clicks, city_input, children):
+    ctx = callback_context
+
+    if not ctx.triggered:
+        return children, "", False  # No action taken
+
+    triggered_id = ctx.triggered[0]['prop_id'].split('.')[0]
+
+    if triggered_id == "add-button" and city_input:
         # Check for duplicates
         existing_cities = [child['props']['value'] for child in children if child['type'] == 'Input']
 
@@ -157,7 +175,11 @@ def add_city(n_clicks, city_input, children):
 
         return children, "", False
 
-    return children, "", False
+    elif triggered_id == "clear-button":
+        return [], "", False  # Clear the list of cities
+
+    return children, "", False  # Return unchanged if no action taken
+
 
 
 @app.callback(
@@ -169,19 +191,22 @@ def add_city(n_clicks, city_input, children):
 )
 def update_output(n_clicks, cities_container, num_days):
     if n_clicks > 0 and cities_container:
+        # Проверка на наличие городов
+        if not cities_container:
+            return {}, {}, "Маршрут пустой, добавьте города", True
         cities_list = [child['props']['value'].strip().title() for child in cities_container if
                        child['type'] == 'Input']
         weather_data, city_data, lats, longs = get_weather_data(cities_list, num_days)
 
-        print(city_data)
-        print(weather_data)
+        #print(city_data)
+        #print(weather_data)
 
         # Создание карты погоды
         map_fig = px.scatter_geo(
             lat=lats,
             lon=longs,
             text=cities_list,
-            title="Карта прогноза погоды",
+            title="Ваш маршрут на карте",
             template="plotly"
         )
 
@@ -195,6 +220,7 @@ def update_output(n_clicks, cities_container, num_days):
             textposition="top center",
             name='Маршрут'
         ))
+
 
         # Формирование заголовков с названиями городов
         parameters = ["Wind Speed", "Humidity", "Temperature", "Precipitation Probability", "Cloud Cover"]
