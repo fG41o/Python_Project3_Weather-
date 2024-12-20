@@ -1,124 +1,109 @@
-from flask import Flask, render_template, request
-import requests
+import numpy
+import pandas as pd
+from geopy.geocoders import Nominatim
+import openmeteo_requests
+import requests_cache
+from dash import Dash, dcc, html, Input, Output
+import plotly.express as px
+from retry_requests import retry
 
-app = Flask(__name__)
 
-
-# Function to get location key from AccuWeather API from user input
-def get_location_key(city: str) -> int:
-    api_key = '4nyShYGdfmuAcVsHg2CuyxYbvXDmMFNW'
-    url = f'http://dataservice.accuweather.com/locations/v1/cities/search?apikey={api_key}&q={city}'
-
+# Function gets city coordinates from user input ("City" or "City, Country")
+def get_coordinates(city_name: str) -> dict:
     try:
-        response = requests.get(url)
-        response.raise_for_status()  # Raise an error for bad responses (4xx or 5xx)
-
-        data = response.json()
-        if data:
-            return [data[0]['Key']]  # Return the first location key
-        else:
-            error_message = "No data found for the specified city."
-            print(error_message)
-            return [None, error_message]
-    except requests.exceptions.HTTPError as http_err:
-        error_message = f"HTTP error occurred: {http_err}"
-        print(error_message)  # Print HTTP error
-    except requests.exceptions.RequestException as req_err:
-        error_message = f"Request error occurred: {req_err}"
-        print(error_message)  # Print general request error
-    except Exception as e:
-        error_message = f"An error occurred: {e}"
-        print(error_message)  # Print any other exception
-    return [None, error_message]
-
-
-# Function to get weather data from AccuWeather API using location key
-def get_weather(location_key: int) -> dict[str]:
-    api_key = '4nyShYGdfmuAcVsHg2CuyxYbvXDmMFNW'
-    url = f'http://dataservice.accuweather.com/currentconditions/v1/{location_key}?apikey={api_key}&language=en-us' \
-          f'&details=true&units=metric'
-
-    try:
-        response = requests.get(url)
-        response.raise_for_status()  # Raise an error for bad responses (4xx or 5xx)
-
-        data = response.json()
-        if data:
-            weather_info = {
-                'temperature': data[0]['Temperature']['Metric']['Value'],  # Temperature in Celsius
-                'humidity': data[0]['RelativeHumidity'],  # Humidity percentage
-                'wind_speed': data[0]['Wind']['Speed']['Metric']['Value'],  # Wind speed in m/s
-                'weather_text': data[0]['WeatherText'],  # Weather description
-                'precipitation_value': data[0].get('PrecipitationSummary', {}).get('Precipitation', {}).get('Metric',
-                                                                                                            {}).get(
-                    'Value', 0)  # Precipitation value in mm
+        geolocator = Nominatim(user_agent='myapplication')
+        location = geolocator.geocode(city_name)
+        if location is not None:
+            return {
+                'coordinates': (location.latitude, location.longitude),
+                'display_name': location.address
             }
-            return [weather_info]
         else:
-            error_message = "No weather data found."
-            print(error_message)
-            return [None, error_message]
-    except requests.exceptions.HTTPError as http_err:
-        error_message = f"HTTP error occurred: {http_err}"
-        print(error_message)  # Print HTTP error
-    except requests.exceptions.RequestException as req_err:
-        error_message = f"Request error occurred: {req_err}"
-        print(error_message)  # Print general request error
+            return {'coordinates': None, 'Message': f'Location not found for {city_name}'}
     except Exception as e:
-        error_message = f"An error occurred: {e}"
-        print(error_message)  # Print any other exception
-    return [None, error_message]
+        return {'coordinates': None, 'Message': f'Error while acquiring {city_name} coordinates: {str(e)}'}
 
 
-# function for deciding if weather is good
-def check_bad_weather(weather_data: dict[str]) -> bool:
-    go_away = False  # False if weather is good, True, if weather is bad
-    if weather_data['temperature'] > 35 or weather_data['temperature'] < 0 or weather_data['wind_speed'] > 50 or \
-            weather_data['precipitation_value'] > 2:
-        go_away = True
-    return go_away
+user_input = ['Moscow, US', 'Moscow, Russia', 'SFLK;LKS;FDLKFSD', 'LA, US', 'NYC']
 
 
-# Route for the main page with the form
-@app.route('/', methods=['GET', 'POST'])
-def index():
-    if request.method == 'POST':
-        start_city = request.form['start_city']
-        end_city = request.form['end_city']
+def get_weather_data(user_input: list[str], num_days: int):
+    city_data = dict()
 
-        # Get location keys for both cities
-        start_location_key = get_location_key(start_city)
-        end_location_key = get_location_key(end_city)
+    lats = []
+    longs = []
+    city_names = []
 
-        if start_location_key[0] and end_location_key[0]:
-            # Get weather data for both cities
-            start_weather = get_weather(start_location_key)
-            end_weather = get_weather(end_location_key)
-
-            if start_weather[0] and end_weather[0]:
-                # See if the weather is suitable
-                goaway = check_bad_weather(start_weather) or check_bad_weather(end_weather)
-                return render_template('results.html',
-                                       start_city=start_city,
-                                       end_city=end_city,
-                                       start_weather=start_weather,
-                                       end_weather=end_weather,
-                                       flag=goaway)
-            else:
-                if start_weather[0] is None:
-                    error_message = start_weather[1]
-                else:
-                    error_message = end_weather[1]
-                return render_template('index.html', error=error_message)
+    for city in user_input:
+        city_data[city] = get_coordinates(city)
+        if city_data[city]['coordinates'] is not None:
+            lats.append(city_data[city]['coordinates'][0])
+            longs.append(city_data[city]['coordinates'][1])
+            city_names.append(city_data[city]['display_name'])
         else:
-            if start_location_key[0] is None:
-                error_message = start_location_key[1]
-            else:
-                error_message = end_location_key[1]
-            return render_template('index.html', error=error_message)
+            print(city_data[city]['Message'])
+            lats.append(0)
+            longs.append(0)
+            city_names.append('Location not found')
 
-    return render_template('index.html')
+    cache_session = requests_cache.CachedSession('.cache', expire_after=3600)
+    retry_session = retry(cache_session, retries=5, backoff_factor=0.2)
+    openmeteo = openmeteo_requests.Client(session=retry_session)
+
+    # Make sure all required weather variables are listed here
+    # The order of variables in hourly or daily is important to assign them correctly below
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": lats,
+        "longitude": longs,
+        "hourly": ["temperature_2m", "relative_humidity_2m", "precipitation_probability",
+                   "cloud_cover", "wind_speed_10m"],
+        "timezone": "auto",
+        "forecast_days": num_days
+    }
+    responses = openmeteo.weather_api(url, params=params)
+
+    weather_data = dict()
+
+    # Process first location. Add a for-loop for multiple locations or weather models
+    for c_n in range(len(lats)):
+        response = responses[c_n]
+        city_name = city_names[c_n]
+        # print(city_name)
+        # print(f"Coordinates {response.Latitude()}°N {response.Longitude()}°E")
+
+        # Process hourly data. The order of variables needs to be the same as requested.
+        if city_name != "Location not found":
+            hourly = response.Hourly()
+            hourly_temperature_2m = hourly.Variables(0).ValuesAsNumpy()
+            hourly_relative_humidity_2m = hourly.Variables(1).ValuesAsNumpy()
+            hourly_precipitation_probability = hourly.Variables(2).ValuesAsNumpy()
+            hourly_cloud_cover = hourly.Variables(3).ValuesAsNumpy()
+            hourly_wind_speed_10m = hourly.Variables(4).ValuesAsNumpy()
+        else:
+            hourly_temperature_2m = numpy.nan
+            hourly_relative_humidity_2m = numpy.nan
+            hourly_precipitation_probability = numpy.nan
+            hourly_cloud_cover = numpy.nan
+            hourly_wind_speed_10m = numpy.nan
+
+        hourly_data = {"date": pd.date_range(
+            start=pd.to_datetime(hourly.Time(), unit="s", utc=True),
+            end=pd.to_datetime(hourly.TimeEnd(), unit="s", utc=True),
+            freq=pd.Timedelta(seconds=hourly.Interval()),
+            inclusive="left"
+        ), "temperature_2m": hourly_temperature_2m, "relative_humidity_2m": hourly_relative_humidity_2m,
+            "precipitation_probability": hourly_precipitation_probability, "cloud_cover": hourly_cloud_cover,
+            "wind_speed_10m": hourly_wind_speed_10m}
+        hourly_dataframe = pd.DataFrame(data=hourly_data)
+
+        weather_data[city_name] = hourly_dataframe
+
+    return weather_data, city_names
 
 
-if __name__ == '__main__':
-    app.run(debug=True)
+weather_data, city_names = get_weather_data(user_input=user_input, num_days=3)
+
+print(city_names[1])
+
+
