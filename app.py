@@ -185,14 +185,24 @@ def update_output(n_clicks, cities_container, num_days):
             template="plotly"
         )
 
+        # Добавление линии маршрута
+        map_fig.add_trace(go.Scattergeo(
+            lat=lats,
+            lon=longs,
+            mode='lines+text',
+            line=dict(width=2, color='blue'),
+            text= None,
+            textposition="top center",
+            name='Маршрут'
+        ))
+
         # Формирование заголовков с названиями городов
-        num_cities = len(city_data)
         parameters = ["Wind Speed", "Humidity", "Temperature", "Precipitation Probability", "Cloud Cover"]
 
         # Формирование заголовков с названиями городов
         titles = []
         for param in parameters:
-            for city in city_data:
+            for city in cities_list:
                 titles.append(f"{param} - {city}")
 
 
