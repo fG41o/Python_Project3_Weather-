@@ -10,11 +10,10 @@ from plotly.subplots import make_subplots
 from retry_requests import retry
 
 
-def titles_generator(ln):
-    return
+# -------------------------------------------------------------------------------
+# Defining functions
 
-
-# Функция для получения координат города
+# Function gets city coordinates from user input
 def get_coordinates(city_name: str) -> dict:
     try:
         geolocator = Nominatim(user_agent='myapplication')
@@ -30,7 +29,7 @@ def get_coordinates(city_name: str) -> dict:
         return {'coordinates': None, 'Message': f'Error while acquiring {city_name} coordinates: {str(e)}'}
 
 
-# Функция для получения данных о погоде
+# Function gets weather data from coordinates using Open-Meteo API
 def get_weather_data(user_input: list[str], num_days: int) -> object:
     city_data = dict()
 
@@ -38,6 +37,7 @@ def get_weather_data(user_input: list[str], num_days: int) -> object:
     longs = []
     city_names = []
 
+    # Loop through each city in the user input
     for city in user_input:
         city_data[city] = get_coordinates(city)
         if city_data[city]['coordinates'] is not None:
@@ -45,11 +45,13 @@ def get_weather_data(user_input: list[str], num_days: int) -> object:
             longs.append(city_data[city]['coordinates'][1])
             city_names.append(city_data[city]['display_name'])
         else:
+            # If coordinates are not found, print the error message and append default values
             print(city_data[city]['Message'])
             lats.append(0)
             longs.append(0)
             city_names.append('Location not found')
 
+    # Create a cached session for API requests
     cache_session = requests_cache.CachedSession('.cache', expire_after=3600)
     retry_session = retry(cache_session, retries=5, backoff_factor=0.2)
     openmeteo = openmeteo_requests.Client(session=retry_session)
@@ -73,8 +75,6 @@ def get_weather_data(user_input: list[str], num_days: int) -> object:
     for c_n in range(len(lats)):
         response = responses[c_n]
         city_name = city_names[c_n]
-        # print(city_name)
-        # print(f"Coordinates {response.Latitude()}°N {response.Longitude()}°E")
 
         # Process hourly data. The order of variables needs to be the same as requested.
         if city_name != "Location not found":
@@ -91,6 +91,7 @@ def get_weather_data(user_input: list[str], num_days: int) -> object:
             hourly_cloud_cover = numpy.nan
             hourly_wind_speed_10m = numpy.nan
 
+        # Create a DataFrame to store hourly weather data with date range as index
         hourly_data = {"date": pd.date_range(
             start=pd.to_datetime(hourly.Time(), unit="s", utc=True),
             end=pd.to_datetime(hourly.TimeEnd(), unit="s", utc=True),
@@ -105,8 +106,11 @@ def get_weather_data(user_input: list[str], num_days: int) -> object:
 
     return weather_data, city_names, lats, longs
 
+# -------------------------------------------------------------------------------
 
-# Создание экземпляра Dash приложения
+
+# -------------------------------------------------------------------------------
+# Setting up Dash app
 app = Dash(__name__)
 
 app.layout = html.Div(style={'padding': '20px', 'fontFamily': 'Arial, sans-serif'}, children=[
@@ -115,17 +119,17 @@ app.layout = html.Div(style={'padding': '20px', 'fontFamily': 'Arial, sans-serif
     dcc.Input(id='city-input', type='text', placeholder='Введите город', style={'width': '300px'}),
 
     html.Button('Добавить город в маршрут', id='add-button', n_clicks=0,
-                style={'marginLeft': '10px', 'backgroundColor': '#4CAF50', 'color': 'white'}, className='button'),
+                style={'marginLeft': '10px', 'backgroundColor': '#4CAF50', 'color': 'white'}),
 
     html.Div(id='cities-container', children=[], style={'marginBottom': '20px'}),
 
     dcc.Input(id='days-input', type='number', value=3, min=1, max=7, style={'width': '100px'}),
 
     html.Button('Получить погоду на несколько дней', id='submit-button', n_clicks=0,
-                style={'marginLeft': '10px', 'backgroundColor': '#2196F3', 'color': 'white'}, className='button'),
+                style={'marginLeft': '10px', 'backgroundColor': '#2196F3', 'color': 'white'}),
 
     html.Button('Очистить маршрут', id='clear-button', n_clicks=0,
-                style={'marginLeft': '10px', 'backgroundColor': '#f44336', 'color': 'white'}, className='button'),
+                style={'marginLeft': '10px', 'backgroundColor': '#f44336', 'color': 'white'}),
 
     dcc.Loading(
         id="loading",
@@ -144,42 +148,29 @@ app.layout = html.Div(style={'padding': '20px', 'fontFamily': 'Arial, sans-serif
 ])
 
 
-
-
 @app.callback(
     [Output('cities-container', 'children'),
+     Output('city-input', 'value'),  # Clear the input field after adding a city
      Output('error-dialog', 'message'),
      Output('error-dialog', 'displayed')],
-    [Input('add-button', 'n_clicks'),
-     Input('clear-button', 'n_clicks')],
+    [Input('add-button', 'n_clicks')],
     [State('city-input', 'value'),
      State('cities-container', 'children')]
 )
-def update_cities(add_clicks, clear_clicks, city_input, children):
-    ctx = callback_context
-
-    if not ctx.triggered:
-        return children, "", False  # No action taken
-
-    triggered_id = ctx.triggered[0]['prop_id'].split('.')[0]
-
-    if triggered_id == "add-button" and city_input:
+def add_city(n_clicks, city_input, children):
+    if n_clicks > 0 and city_input:
         # Check for duplicates
         existing_cities = [child['props']['value'] for child in children if child['type'] == 'Input']
 
         if city_input in existing_cities:
-            return children, f'Город "{city_input}" уже добавлен!', True
+            return children, "", f'Город "{city_input}" уже добавлен!', True
 
-        new_city_input = dcc.Input(type='text', value=city_input, style={'margin': '5px'})
+        new_city_input = dcc.Input(type='text', value=city_input, style={'marginTop': '5px'})
         children.append(new_city_input)
 
-        return children, "", False
+        return children, "", "", False  # Clear input field and no error
 
-    elif triggered_id == "clear-button":
-        return [], "", False  # Clear the list of cities
-
-    return children, "", False  # Return unchanged if no action taken
-
+    return children, city_input, "", False  # Return unchanged if no action taken
 
 
 @app.callback(
@@ -191,17 +182,17 @@ def update_cities(add_clicks, clear_clicks, city_input, children):
 )
 def update_output(n_clicks, cities_container, num_days):
     if n_clicks > 0 and cities_container:
-        # Проверка на наличие городов
+        # Check for cities
         if not cities_container:
             return {}, {}, "Маршрут пустой, добавьте города", True
         cities_list = [child['props']['value'].strip().title() for child in cities_container if
                        child['type'] == 'Input']
         weather_data, city_data, lats, longs = get_weather_data(cities_list, num_days)
 
-        #print(city_data)
-        #print(weather_data)
+        # print(city_data)
+        # print(weather_data)
 
-        # Создание карты погоды
+        # Route map creation
         map_fig = px.scatter_geo(
             lat=lats,
             lon=longs,
@@ -210,34 +201,31 @@ def update_output(n_clicks, cities_container, num_days):
             template="plotly"
         )
 
-        # Добавление линии маршрута
+        # Route line adding
         map_fig.add_trace(go.Scattergeo(
             lat=lats,
             lon=longs,
             mode='lines+text',
             line=dict(width=2, color='blue'),
-            text= None,
+            text=None,
             textposition="top center",
             name='Маршрут'
         ))
 
-
-        # Формирование заголовков с названиями городов
+        # Making proper titles for graphs
         parameters = ["Wind Speed", "Humidity", "Temperature", "Precipitation Probability", "Cloud Cover"]
 
-        # Формирование заголовков с названиями городов
         titles = []
         for param in parameters:
             for city in cities_list:
                 titles.append(f"{param} - {city}")
 
-
-        # Создание графиков
+        # Graphing weather graphs
         fig = make_subplots(rows=5, cols=len(city_data), subplot_titles=titles, shared_xaxes=False)
 
         for i, city in enumerate(city_data):
             if city in weather_data and not weather_data[city].empty:
-                print(f"Data for {city}: {weather_data[city]}")  # Отладочное сообщение
+                print(f"Data for {city}: {weather_data[city]}")  # Debug
                 fig.add_trace(go.Scatter(x=weather_data[city]['date'],
                                          y=weather_data[city]['wind_speed_10m'],
                                          mode='lines+markers',
@@ -263,10 +251,10 @@ def update_output(n_clicks, cities_container, num_days):
                     go.Scatter(x=weather_data[city]['date'],
                                y=weather_data[city]['precipitation_probability'],
                                mode='lines+markers',
-                               name=f'Precipitation Probabilityin in {cities_list[i]}',
+                               name=f'Precipitation Probability in {cities_list[i]}',
                                line=dict(color='orange'),
                                showlegend=False),
-                            row=4, col=i + 1)
+                    row=4, col=i + 1)
                 fig.add_trace(
                     go.Scatter(x=weather_data[city]['date'],
                                y=weather_data[city]['cloud_cover'],
